@@ -10,11 +10,29 @@ fn main() {
         .run();
 }
 
+macro_rules! config {
+    ($dbg: expr, $release: expr) => {{
+        #[cfg(debug_assertions)]
+        {
+            $dbg
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            $release
+        }
+    }};
+}
+
+#[cfg(not(debug_assertions))]
 #[derive(Resource)]
 struct Config {
-    #[cfg(not(debug_assertions))]
     speed: f32,
+    sprint_multiplier: f32,
 }
+
+#[cfg(debug_assertions)]
+#[derive(Resource)]
+struct Config;
 
 #[cfg_attr(
     debug_assertions,
@@ -22,23 +40,31 @@ struct Config {
 )]
 const PLAYER_SPEED: f32 = 150.0;
 
+#[cfg_attr(
+    debug_assertions,
+    const_tweaker::tweak(min = 1.0, max = 100.0, step = 0.01)
+)]
+const SPRINT_MULTIPLIER: f32 = 1.5;
+
 impl Config {
+    #[cfg(not(debug_assertions))]
     pub fn new() -> Self {
         Self {
-            #[cfg(not(debug_assertions))]
             speed: PLAYER_SPEED,
+            sprint_multiplier: SPRINT_MULTIPLIER,
         }
+    }
+    #[cfg(debug_assertions)]
+    pub fn new() -> Self {
+        Self
     }
     #[inline(always)]
     pub fn speed(&self) -> f32 {
-        #[cfg(debug_assertions)]
-        {
-            *PLAYER_SPEED
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            self.speed
-        }
+        config!(*PLAYER_SPEED, self.speed)
+    }
+    #[inline(always)]
+    pub fn sprint_multiplier(&self) -> f32 {
+        config!(*SPRINT_MULTIPLIER, self.sprint_multiplier)
     }
 }
 
@@ -49,6 +75,7 @@ struct Player;
 struct Direction {
     x: i32,
     y: i32,
+    sprint: bool,
 }
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -59,7 +86,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_xyz(100., 0., 0.),
             ..default()
         },
-        Direction { x: 0, y: 0 },
+        Direction {
+            x: 0,
+            y: 0,
+            sprint: false,
+        },
         Player,
     ));
 }
@@ -71,6 +102,7 @@ fn keyboard_input_system(
     for (_, mut direction) in &mut sprite_position {
         (*direction).x = 0;
         (*direction).y = 0;
+        (*direction).sprint = false;
         if keyboard_input.pressed(KeyCode::A) {
             (*direction).x = -1;
         }
@@ -83,6 +115,9 @@ fn keyboard_input_system(
         if keyboard_input.pressed(KeyCode::S) {
             (*direction).y = -1;
         }
+        if keyboard_input.pressed(KeyCode::ShiftLeft) {
+            (*direction).sprint = true;
+        }
     }
 }
 
@@ -94,19 +129,24 @@ fn sprite_movement(
     mut sprite_position: Query<(&Direction, &mut Transform)>,
 ) {
     for (logo, mut transform) in &mut sprite_position {
-        let Direction { x, y } = *logo;
+        let Direction { x, y, sprint } = *logo;
+        let speed = if sprint {
+            config.speed() * config.sprint_multiplier()
+        } else {
+            config.speed()
+        };
         if y > 0 {
-            transform.translation.y += config.speed() * time.delta_seconds();
+            transform.translation.y += speed * time.delta_seconds();
         }
         if y < 0 {
-            transform.translation.y -= config.speed() * time.delta_seconds();
+            transform.translation.y -= speed * time.delta_seconds();
         }
 
         if x > 0 {
-            transform.translation.x += config.speed() * time.delta_seconds();
+            transform.translation.x += speed * time.delta_seconds();
         }
         if x < 0 {
-            transform.translation.x -= config.speed() * time.delta_seconds();
+            transform.translation.x -= speed * time.delta_seconds();
         }
     }
 }
