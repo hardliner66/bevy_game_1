@@ -1,13 +1,27 @@
-use bevy::prelude::*;
+use bevy::{input::mouse::MouseWheel, prelude::*};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(Config::new())
         .add_systems(Startup, setup)
-        .add_systems(Update, keyboard_input_system)
-        .add_systems(Update, sprite_movement)
+        .add_systems(Update, (keyboard_input_system, draw_cursor, zoom_in))
+        .add_systems(FixedUpdate, sprite_movement)
         .run();
+}
+
+pub fn zoom_in(
+    mut mouse_wheel_events: EventReader<MouseWheel>,
+    mut query: Query<&mut OrthographicProjection, With<Camera>>,
+    time: Res<Time>,
+) {
+    let mut y = 0.0;
+    for event in mouse_wheel_events.read() {
+        y += event.y;
+    }
+    for mut projection in query.iter_mut() {
+        projection.scale -= y * time.delta_seconds();
+    }
 }
 
 macro_rules! config {
@@ -71,52 +85,53 @@ impl Config {
 #[derive(Component)]
 struct Player;
 
-#[derive(Component)]
-struct Direction {
-    x: i32,
-    y: i32,
-    sprint: bool,
-}
+#[derive(Component, Deref)]
+struct Acceleration(Vec3);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2dBundle {
+        ..Default::default()
+    });
     commands.spawn((
         SpriteBundle {
             texture: asset_server.load("character.png"),
             transform: Transform::from_xyz(100., 0., 0.),
             ..default()
         },
-        Direction {
-            x: 0,
-            y: 0,
-            sprint: false,
-        },
+        Acceleration(Default::default()),
         Player,
     ));
 }
 
 fn keyboard_input_system(
+    config: Res<Config>,
     keyboard_input: Res<Input<KeyCode>>,
-    mut sprite_position: Query<(&Player, &mut Direction)>,
+    mut sprite_position: Query<(&Player, &mut Acceleration)>,
+    mut app_exit_events: ResMut<Events<bevy::app::AppExit>>,
 ) {
-    for (_, mut direction) in &mut sprite_position {
-        (*direction).x = 0;
-        (*direction).y = 0;
-        (*direction).sprint = false;
+    for (_, mut acc) in &mut sprite_position {
+        (*acc).0.x = 0.0;
+        (*acc).0.y = 0.0;
         if keyboard_input.pressed(KeyCode::A) {
-            (*direction).x = -1;
+            (*acc).0.x -= 1.0;
         }
         if keyboard_input.pressed(KeyCode::D) {
-            (*direction).x = 1;
+            (*acc).0.x += 1.0;
         }
         if keyboard_input.pressed(KeyCode::W) {
-            (*direction).y = 1;
+            (*acc).0.y += 1.0;
         }
         if keyboard_input.pressed(KeyCode::S) {
-            (*direction).y = -1;
+            (*acc).0.y -= 1.0;
         }
+
+        if keyboard_input.pressed(KeyCode::Escape) {
+            app_exit_events.send(bevy::app::AppExit);
+        }
+
         if keyboard_input.pressed(KeyCode::ShiftLeft) {
-            (*direction).sprint = true;
+            (*acc).0.x *= config.sprint_multiplier();
+            (*acc).0.y *= config.sprint_multiplier();
         }
     }
 }
@@ -126,27 +141,28 @@ fn keyboard_input_system(
 fn sprite_movement(
     time: Res<Time>,
     config: Res<Config>,
-    mut sprite_position: Query<(&Direction, &mut Transform)>,
+    mut sprite_position: Query<(&Acceleration, &mut Transform)>,
 ) {
-    for (logo, mut transform) in &mut sprite_position {
-        let Direction { x, y, sprint } = *logo;
-        let speed = if sprint {
-            config.speed() * config.sprint_multiplier()
-        } else {
-            config.speed()
-        };
-        if y > 0 {
-            transform.translation.y += speed * time.delta_seconds();
-        }
-        if y < 0 {
-            transform.translation.y -= speed * time.delta_seconds();
-        }
-
-        if x > 0 {
-            transform.translation.x += speed * time.delta_seconds();
-        }
-        if x < 0 {
-            transform.translation.x -= speed * time.delta_seconds();
-        }
+    for (acc, mut transform) in &mut sprite_position {
+        transform.translation += acc.0 * config.speed() * time.delta_seconds();
     }
+}
+
+fn draw_cursor(
+    camera_query: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window>,
+    mut gizmos: Gizmos,
+) {
+    let (camera, camera_transform) = camera_query.single();
+
+    let Some(cursor_position) = windows.single().cursor_position() else {
+        return;
+    };
+
+    // Calculate a world position based on the cursor's position.
+    let Some(point) = camera.viewport_to_world_2d(camera_transform, cursor_position) else {
+        return;
+    };
+
+    gizmos.circle_2d(point, 10., Color::WHITE);
 }
